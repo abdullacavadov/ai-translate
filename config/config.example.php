@@ -1,5 +1,4 @@
 <?php
 return [
-    'gemini_api_key' => 'YOUR_GEMINI_API_KEY',
-    'gemini_model' => 'gemini-3.6-flash',
+    'google_translate_api_key' => 'YOUR_GOOGLE_TRANSLATE_API_KEY',
 ];
