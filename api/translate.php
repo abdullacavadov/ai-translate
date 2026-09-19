@@ -69,6 +69,7 @@ curl_setopt_array($ch, [
         'Api-Revision: 2026-05-20',
     ],
     CURLOPT_POSTFIELDS=>$payload,
+    CURLOPT_CONNECTTIMEOUT=>10,
     CURLOPT_TIMEOUT=>30
 ]);
 $response = curl_exec($ch);
@@ -78,17 +79,43 @@ curl_close($ch);
 
 if ($response === false || $curlError) {
     http_response_code(502);
-    echo json_encode(['success'=>false,'message'=>'AI service connection failed.']);
+    echo json_encode(['success'=>false,'message'=>'AI service connection failed: ' . $curlError]);
     exit;
 }
 
 $data = json_decode($response, true);
-$translation = trim((string)($data['output_text'] ?? ''));
 
-if ($status >= 400 || $translation === '') {
+if ($status >= 400) {
     $message = $data['error']['message'] ?? 'AI translation failed.';
     http_response_code(502);
     echo json_encode(['success'=>false,'message'=>$message]);
+    exit;
+}
+
+/*
+ * Gemini Interactions API with Api-Revision 2026-05-20 returns
+ * model output inside steps[]. The SDK exposes output_text as a
+ * convenience property, but REST responses contain the steps array.
+ */
+$translation = '';
+
+foreach (($data['steps'] ?? []) as $step) {
+    if (($step['type'] ?? '') !== 'model_output') {
+        continue;
+    }
+
+    foreach (($step['content'] ?? []) as $part) {
+        if (($part['type'] ?? '') === 'text') {
+            $translation .= (string)($part['text'] ?? '');
+        }
+    }
+}
+
+$translation = trim($translation);
+
+if ($translation === '') {
+    http_response_code(502);
+    echo json_encode(['success'=>false,'message'=>'AI returned an empty translation.']);
     exit;
 }
 
