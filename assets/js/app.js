@@ -6,6 +6,7 @@ let debounceTimer=null;
 let activeController=null;
 let requestId=0;
 let lastRequestKey="";
+const translationCache=new Map();
 
 function updateCharCount(){
   $("charCount").textContent=source.value.length+" / 5000";
@@ -15,8 +16,7 @@ function getRequestKey(){
   return JSON.stringify({
     text:source.value.trim(),
     from:from.value,
-    to:to.value,
-    tone:$("tone").value
+    to:to.value
   });
 }
 
@@ -41,9 +41,8 @@ source.addEventListener("input",()=>{
   scheduleTranslate();
 });
 
-from.addEventListener("change",()=>scheduleTranslate(150));
-to.addEventListener("change",()=>scheduleTranslate(150));
-$("tone").addEventListener("change",()=>scheduleTranslate(150));
+from.addEventListener("change",()=>scheduleTranslate(100));
+to.addEventListener("change",()=>scheduleTranslate(100));
 
 $("clearBtn").addEventListener("click",()=>{
   if(activeController)activeController.abort();
@@ -58,6 +57,7 @@ $("clearBtn").addEventListener("click",()=>{
 $("copyBtn").addEventListener("click",async()=>{
   const text=result.textContent;
   if(!text||text==="Translation will appear here...")return;
+
   try{
     await navigator.clipboard.writeText(text);
     status.textContent="Copied";
@@ -68,11 +68,12 @@ $("copyBtn").addEventListener("click",async()=>{
 
 $("swapBtn").addEventListener("click",()=>{
   if(from.value==="auto")return;
+
   [from.value,to.value]=[to.value,from.value];
   [source.value,result.textContent]=[result.textContent,source.value];
   updateCharCount();
   lastRequestKey="";
-  scheduleTranslate(150);
+  scheduleTranslate(100);
 });
 
 async function translate(){
@@ -84,7 +85,15 @@ async function translate(){
   const key=getRequestKey();
   if(key===lastRequestKey)return;
 
+  if(translationCache.has(key)){
+    result.textContent=translationCache.get(key);
+    lastRequestKey=key;
+    status.textContent="Translated";
+    return;
+  }
+
   if(activeController)activeController.abort();
+
   const controller=new AbortController();
   activeController=controller;
   const currentRequest=++requestId;
@@ -99,71 +108,30 @@ async function translate(){
       body:JSON.stringify({
         text,
         from:from.value,
-        to:to.value,
-        tone:$("tone").value
+        to:to.value
       }),
       signal:controller.signal
     });
 
-    if(!response.ok){
-      let message="Translation failed.";
-      try{
-        const data=await response.json();
-        message=data.message||message;
-      }catch{}
-      throw new Error(message);
+    let data=null;
+
+    try{
+      data=await response.json();
+    }catch{
+      throw new Error("Invalid translation service response.");
     }
 
-    if(!response.body)throw new Error("Streaming is not supported by this browser.");
-
-    const reader=response.body.getReader();
-    const decoder=new TextDecoder();
-    let buffer="";
-    let translation="";
-
-    while(true){
-      const {value,done}=await reader.read();
-      if(done)break;
-
-      buffer+=decoder.decode(value,{stream:true});
-
-      while(true){
-        const separator=buffer.indexOf("\n\n");
-        if(separator===-1)break;
-
-        const block=buffer.slice(0,separator);
-        buffer=buffer.slice(separator+2);
-
-        const line=block.split(/\r?\n/).find(line=>line.startsWith("data:"));
-        if(!line)continue;
-
-        const payload=line.slice(5).trim();
-        if(!payload)continue;
-
-        const event=JSON.parse(payload);
-
-        if(event.type==="text"){
-          translation+=event.text||"";
-          result.textContent=translation;
-        }
-
-        if(event.type==="error"){
-          throw new Error(event.message||"Translation failed.");
-        }
-
-        if(event.type==="done"){
-          lastRequestKey=key;
-          status.textContent="Translated";
-        }
-      }
+    if(!response.ok||!data.success){
+      throw new Error(data.message||"Translation failed.");
     }
 
     if(controller.signal.aborted||currentRequest!==requestId)return;
 
-    if(!translation){
-      throw new Error("AI returned an empty translation.");
-    }
+    const translation=data.translation||"";
+    if(!translation)throw new Error("Google Translation returned an empty result.");
 
+    result.textContent=translation;
+    translationCache.set(key,translation);
     lastRequestKey=key;
     status.textContent="Translated";
   }catch(error){
@@ -178,14 +146,18 @@ async function translate(){
 
 function speak(text,lang){
   if(!text||!("speechSynthesis" in window))return;
+
   window.speechSynthesis.cancel();
+
   const u=new SpeechSynthesisUtterance(text);
   u.lang=lang==="az"?"az-AZ":lang==="tr"?"tr-TR":lang==="de"?"de-DE":lang==="ru"?"ru-RU":lang==="fr"?"fr-FR":lang==="es"?"es-ES":"en-US";
+
   speechSynthesis.speak(u);
 }
 
 $("speakSourceBtn").addEventListener("click",()=>speak(source.value,from.value==="auto"?"en":from.value));
 $("speakResultBtn").addEventListener("click",()=>speak(result.textContent,to.value));
+
 $("themeToggle").addEventListener("click",()=>{
   document.body.classList.toggle("light");
   $("themeToggle").textContent=document.body.classList.contains("light")?"☀":"☾";
