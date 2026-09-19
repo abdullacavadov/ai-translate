@@ -1,15 +1,13 @@
 <?php
 declare(strict_types=1);
 
-header('Content-Type: text/event-stream; charset=utf-8');
-header('Cache-Control: no-cache, no-store, must-revalidate');
-header('X-Accel-Buffering: no');
+header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success'=>false,'message'=>'Method not allowed.']);
+    echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
     exit;
 }
 
@@ -17,145 +15,138 @@ $input = json_decode(file_get_contents('php://input'), true) ?? [];
 $text = trim((string)($input['text'] ?? ''));
 $from = trim((string)($input['from'] ?? 'auto'));
 $to = trim((string)($input['to'] ?? 'en'));
-$tone = trim((string)($input['tone'] ?? 'natural'));
 
 if ($text === '') {
     http_response_code(422);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success'=>false,'message'=>'Text is required.']);
+    echo json_encode(['success' => false, 'message' => 'Text is required.']);
     exit;
 }
 
 if (mb_strlen($text) > 5000) {
     http_response_code(422);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success'=>false,'message'=>'Text is limited to 5000 characters.']);
+    echo json_encode(['success' => false, 'message' => 'Text is limited to 5000 characters.']);
+    exit;
+}
+
+$languages = ['auto', 'az', 'en', 'tr', 'de', 'ru', 'fr', 'es'];
+
+if (!in_array($from, $languages, true) || !in_array($to, $languages, true) || $to === 'auto') {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Invalid language selection.']);
+    exit;
+}
+
+if ($from !== 'auto' && $from === $to) {
+    echo json_encode([
+        'success' => true,
+        'translation' => $text,
+        'detectedSourceLanguage' => $from,
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 $configFile = dirname(__DIR__) . '/config/config.php';
+
 if (!is_file($configFile)) {
     http_response_code(500);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success'=>false,'message'=>'AI configuration is missing. Copy config/config.example.php to config/config.php.']);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Translation configuration is missing. Copy config/config.example.php to config/config.php.',
+    ]);
     exit;
 }
 
 $config = require $configFile;
-$apiKey = trim((string)($config['gemini_api_key'] ?? ''));
-$model = trim((string)($config['gemini_model'] ?? 'gemini-3.6-flash'));
+$apiKey = trim((string)($config['google_translate_api_key'] ?? ''));
 
-if ($apiKey === '' || $apiKey === 'YOUR_GEMINI_API_KEY') {
+if ($apiKey === '' || $apiKey === 'YOUR_GOOGLE_TRANSLATE_API_KEY') {
     http_response_code(500);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success'=>false,'message'=>'Gemini API key is not configured.']);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Google Cloud Translation API key is not configured.',
+    ]);
     exit;
 }
 
-$languages = [
-    'auto'=>'the detected source language','az'=>'Azerbaijani','en'=>'English','tr'=>'Turkish',
-    'de'=>'German','ru'=>'Russian','fr'=>'French','es'=>'Spanish'
+$payload = [
+    'q' => $text,
+    'target' => $to,
+    'format' => 'text',
+    'model' => 'nmt',
 ];
 
-$fromName = $languages[$from] ?? 'the detected source language';
-$toName = $languages[$to] ?? 'English';
-$toneName = ['natural'=>'natural','formal'=>'formal','professional'=>'professional','casual'=>'casual'][$tone] ?? 'natural';
-
-$prompt = "Translate the following text from {$fromName} to {$toName}. Use a {$toneName} tone. Preserve meaning, formatting, names, numbers, URLs and technical terms. Return ONLY the translated text, without explanations or quotation marks.\n\nText:\n{$text}";
-
-$url = 'https://generativelanguage.googleapis.com/v1beta/interactions';
-$payload = json_encode([
-    'model' => $model,
-    'input' => $prompt,
-    'stream' => true,
-], JSON_UNESCAPED_UNICODE);
-
-function sendSse(array $data): void
-{
-    echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
-    if (ob_get_level() > 0) {
-        ob_flush();
-    }
-    flush();
+if ($from !== 'auto') {
+    $payload['source'] = $from;
 }
 
-$buffer = '';
+$jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE);
 
-$ch = curl_init($url);
+if ($jsonPayload === false) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Could not prepare translation request.']);
+    exit;
+}
+
+$ch = curl_init('https://translation.googleapis.com/language/translate/v2');
+
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
-    CURLOPT_RETURNTRANSFER => false,
+    CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER => [
-        'Content-Type: application/json',
-        'Accept: text/event-stream',
-        'x-goog-api-key: ' . $apiKey,
-        'Api-Revision: 2026-05-20',
+        'Content-Type: application/json; charset=utf-8',
+        'Accept: application/json',
+        'X-Goog-Api-Key: ' . $apiKey,
     ],
-    CURLOPT_POSTFIELDS => $payload,
-    CURLOPT_CONNECTTIMEOUT => 10,
-    CURLOPT_TIMEOUT => 60,
-    CURLOPT_WRITEFUNCTION => function ($ch, string $chunk) use (&$buffer): int {
-        $buffer .= $chunk;
-
-        while (($separator = strpos($buffer, "\n\n")) !== false) {
-            $eventBlock = substr($buffer, 0, $separator);
-            $buffer = substr($buffer, $separator + 2);
-
-            foreach (preg_split("/\r?\n/", $eventBlock) as $line) {
-                if (!str_starts_with($line, 'data:')) {
-                    continue;
-                }
-
-                $json = trim(substr($line, 5));
-                if ($json === '' || $json === '[DONE]') {
-                    continue;
-                }
-
-                $event = json_decode($json, true);
-                if (!is_array($event)) {
-                    continue;
-                }
-
-                if (($event['event_type'] ?? '') === 'step.delta'
-                    && ($event['delta']['type'] ?? '') === 'text') {
-                    sendSse([
-                        'type' => 'text',
-                        'text' => (string)($event['delta']['text'] ?? ''),
-                    ]);
-                }
-
-                if (($event['event_type'] ?? '') === 'error') {
-                    sendSse([
-                        'type' => 'error',
-                        'message' => (string)($event['error']['message'] ?? 'AI translation failed.'),
-                    ]);
-                }
-            }
-        }
-
-        return strlen($chunk);
-    },
+    CURLOPT_POSTFIELDS => $jsonPayload,
+    CURLOPT_CONNECTTIMEOUT => 5,
+    CURLOPT_TIMEOUT => 15,
 ]);
 
-$success = curl_exec($ch);
+$response = curl_exec($ch);
 $curlError = curl_error($ch);
-$status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
-if ($success === false || $curlError) {
-    sendSse([
-        'type' => 'error',
-        'message' => 'AI service connection failed: ' . $curlError,
+if ($response === false || $curlError !== '') {
+    http_response_code(502);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Google Translation service connection failed.',
     ]);
     exit;
 }
 
-if ($status >= 400) {
-    sendSse([
-        'type' => 'error',
-        'message' => 'AI translation failed with HTTP ' . $status . '.',
+$data = json_decode($response, true);
+
+if ($status >= 400 || !is_array($data)) {
+    $message = 'Google Translation request failed.';
+
+    if (is_array($data)) {
+        $message = (string)($data['error']['message'] ?? $message);
+    }
+
+    http_response_code($status >= 400 ? $status : 502);
+    echo json_encode([
+        'success' => false,
+        'message' => $message,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$translation = (string)($data['data']['translations'][0]['translatedText'] ?? '');
+$detectedSourceLanguage = $data['data']['translations'][0]['detectedSourceLanguage'] ?? null;
+
+if ($translation === '') {
+    http_response_code(502);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Google Translation returned an empty result.',
     ]);
     exit;
 }
 
-sendSse(['type' => 'done']);
+echo json_encode([
+    'success' => true,
+    'translation' => html_entity_decode($translation, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+    'detectedSourceLanguage' => $detectedSourceLanguage,
+], JSON_UNESCAPED_UNICODE);
