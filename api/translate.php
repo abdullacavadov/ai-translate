@@ -35,7 +35,7 @@ if (!is_file($configFile)) {
 }
 $config = require $configFile;
 $apiKey = trim((string)($config['gemini_api_key'] ?? ''));
-$model = trim((string)($config['gemini_model'] ?? 'gemini-2.5-flash'));
+$model = trim((string)($config['gemini_model'] ?? 'gemini-3.6-flash'));
 
 if ($apiKey === '' || $apiKey === 'YOUR_GEMINI_API_KEY') {
     http_response_code(500);
@@ -53,14 +53,21 @@ $toneName = ['natural'=>'natural','formal'=>'formal','professional'=>'profession
 
 $prompt = "Translate the following text from {$fromName} to {$toName}. Use a {$toneName} tone. Preserve meaning, formatting, names, numbers, URLs and technical terms. Return ONLY the translated text, without explanations or quotation marks.\n\nText:\n{$text}";
 
-$url = 'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($model) . ':generateContent?key=' . rawurlencode($apiKey);
-$payload = json_encode(['contents'=>[['parts'=>[['text'=>$prompt]]]]], JSON_UNESCAPED_UNICODE);
+$url = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+$payload = json_encode([
+    'model' => $model,
+    'input' => $prompt,
+], JSON_UNESCAPED_UNICODE);
 
 $ch = curl_init($url);
 curl_setopt_array($ch, [
     CURLOPT_POST=>true,
     CURLOPT_RETURNTRANSFER=>true,
-    CURLOPT_HTTPHEADER=>['Content-Type: application/json'],
+    CURLOPT_HTTPHEADER=>[
+        'Content-Type: application/json',
+        'x-goog-api-key: ' . $apiKey,
+        'Api-Revision: 2026-05-20',
+    ],
     CURLOPT_POSTFIELDS=>$payload,
     CURLOPT_TIMEOUT=>30
 ]);
@@ -76,7 +83,7 @@ if ($response === false || $curlError) {
 }
 
 $data = json_decode($response, true);
-$translation = trim((string)($data['candidates'][0]['content']['parts'][0]['text'] ?? ''));
+$translation = trim((string)($data['output_text'] ?? ''));
 
 if ($status >= 400 || $translation === '') {
     $message = $data['error']['message'] ?? 'AI translation failed.';
