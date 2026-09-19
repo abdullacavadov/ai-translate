@@ -13,10 +13,10 @@ function updateCharCount(){
 
 function getRequestKey(){
   return JSON.stringify({
-    text: source.value.trim(),
-    from: from.value,
-    to: to.value,
-    tone: $("tone").value
+    text:source.value.trim(),
+    from:from.value,
+    to:to.value,
+    tone:$("tone").value
   });
 }
 
@@ -25,7 +25,7 @@ function scheduleTranslate(delay=400){
 
   const text=source.value.trim();
   if(!text){
-    if(activeController) activeController.abort();
+    if(activeController)activeController.abort();
     result.textContent="Translation will appear here...";
     status.textContent="Ready";
     lastRequestKey="";
@@ -46,7 +46,7 @@ to.addEventListener("change",()=>scheduleTranslate(150));
 $("tone").addEventListener("change",()=>scheduleTranslate(150));
 
 $("clearBtn").addEventListener("click",()=>{
-  if(activeController) activeController.abort();
+  if(activeController)activeController.abort();
   clearTimeout(debounceTimer);
   source.value="";
   result.textContent="Translation will appear here...";
@@ -89,6 +89,7 @@ async function translate(){
   activeController=controller;
   const currentRequest=++requestId;
 
+  result.textContent="";
   status.textContent="Translating...";
 
   try{
@@ -104,12 +105,65 @@ async function translate(){
       signal:controller.signal
     });
 
-    const data=await response.json();
+    if(!response.ok){
+      let message="Translation failed.";
+      try{
+        const data=await response.json();
+        message=data.message||message;
+      }catch{}
+      throw new Error(message);
+    }
+
+    if(!response.body)throw new Error("Streaming is not supported by this browser.");
+
+    const reader=response.body.getReader();
+    const decoder=new TextDecoder();
+    let buffer="";
+    let translation="";
+
+    while(true){
+      const {value,done}=await reader.read();
+      if(done)break;
+
+      buffer+=decoder.decode(value,{stream:true});
+
+      while(true){
+        const separator=buffer.indexOf("\n\n");
+        if(separator===-1)break;
+
+        const block=buffer.slice(0,separator);
+        buffer=buffer.slice(separator+2);
+
+        const line=block.split(/\r?\n/).find(line=>line.startsWith("data:"));
+        if(!line)continue;
+
+        const payload=line.slice(5).trim();
+        if(!payload)continue;
+
+        const event=JSON.parse(payload);
+
+        if(event.type==="text"){
+          translation+=event.text||"";
+          result.textContent=translation;
+        }
+
+        if(event.type==="error"){
+          throw new Error(event.message||"Translation failed.");
+        }
+
+        if(event.type==="done"){
+          lastRequestKey=key;
+          status.textContent="Translated";
+        }
+      }
+    }
 
     if(controller.signal.aborted||currentRequest!==requestId)return;
-    if(!response.ok||!data.success)throw new Error(data.message||"Translation failed.");
 
-    result.textContent=data.translation;
+    if(!translation){
+      throw new Error("AI returned an empty translation.");
+    }
+
     lastRequestKey=key;
     status.textContent="Translated";
   }catch(error){
