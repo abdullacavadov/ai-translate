@@ -67,12 +67,6 @@
             </div>
 
             <div class="action-row">
-                <select id="tone" class="form-select tone-select" aria-label="Translation style">
-                    <option value="natural">Natural</option>
-                    <option value="formal">Formal</option>
-                    <option value="professional">Professional</option>
-                    <option value="casual">Casual</option>
-                </select>
                 <span class="auto-translate-hint">Auto translation enabled</span>
             </div>
         </section>
