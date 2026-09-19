@@ -73,10 +73,7 @@
                     <option value="professional">Professional</option>
                     <option value="casual">Casual</option>
                 </select>
-                <button id="translateBtn" class="translate-btn" type="button">
-                    <span id="buttonText">Translate with AI</span>
-                    <span id="spinner" class="spinner-border spinner-border-sm d-none"></span>
-                </button>
+                <span class="auto-translate-hint">Auto translation enabled</span>
             </div>
         </section>
     </div>
