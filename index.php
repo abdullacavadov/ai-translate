@@ -65,10 +65,6 @@
                     </div>
                 </div>
             </div>
-
-            <div class="action-row">
-                <span class="auto-translate-hint">Auto translation enabled</span>
-            </div>
         </section>
     </div>
 </main>
